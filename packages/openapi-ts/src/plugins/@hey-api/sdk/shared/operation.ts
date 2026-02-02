@@ -6,6 +6,7 @@ import { statusCodeToGroup } from '@hey-api/shared';
 import { getTypedConfig } from '../../../../config/utils';
 import { getClientPlugin } from '../../../../plugins/@hey-api/client-core/utils';
 import { $ } from '../../../../ts-dsl';
+import type { TypeTsDsl } from '../../../../ts-dsl/base';
 import type { Field, Fields } from '../../client-core/bundle/params';
 import type { HeyApiSdkPlugin } from '../types';
 import { isInstance } from '../v1/node';
@@ -73,6 +74,7 @@ export const operationOptionsType = ({
 type OperationParameters = {
   argNames: Array<string>;
   fields: Array<Field | Fields>;
+  fieldsByArgument: boolean;
   parameters: Array<ReturnType<typeof $.param>>;
 };
 
@@ -88,6 +90,7 @@ export function operationParameters({
   const result: OperationParameters = {
     argNames: [],
     fields: [],
+    fieldsByArgument: false,
     parameters: [],
   };
 
@@ -97,37 +100,131 @@ export function operationParameters({
 
   if (plugin.config.paramsStructure === 'flat') {
     const signature = getSignatureParameters({ operation, plugin });
-    const flatParams = $.type.object();
 
     if (signature) {
-      let isParametersRequired = false;
+      const usePositionalPathParams = plugin.config.positionalPathParams;
 
-      for (const key in signature.parameters) {
-        const parameter = signature.parameters[key]!;
-        if (parameter.isRequired) {
-          isParametersRequired = true;
+      let appliedPositionalPathParams = false;
+
+      if (usePositionalPathParams && operation.parameters?.path) {
+        const pathEntries = Object.entries(operation.parameters.path);
+        if (pathEntries.length === 1) {
+          const [, pathParameter] = pathEntries[0]!;
+          const pathSignature = Object.values(signature.parameters).find((parameter) => {
+            const originalName = parameter.originalName ?? parameter.name;
+            return originalName === pathParameter.name;
+          });
+          if (pathSignature) {
+            const nonPathFields = signature.fields.filter(
+              (field) => !('in' in field && field.in === 'path'),
+            );
+
+            if (nonPathFields.length) {
+              appliedPositionalPathParams = true;
+              // Add positional path arg name in the SDK signature.
+              result.argNames.push(pathSignature.name);
+              // Record the field mapping for the positional path arg.
+              result.fields.push({
+                in: 'path',
+                key: pathSignature.name,
+                ...(pathSignature.originalName ? { map: pathSignature.originalName } : {}),
+              });
+              // Build the TypeScript type for the positional path arg.
+              const pathType = pluginTypeScript.api.schemaToType({
+                plugin: pluginTypeScript,
+                schema: pathSignature.schema,
+                state: refs({
+                  path: [],
+                }),
+              });
+              result.parameters.push(
+                $.param(pathSignature.name, (p) =>
+                  p.required(pathSignature.isRequired).type(pathType as TypeTsDsl),
+                ),
+              );
+
+              const flatParams = $.type.object();
+              let isParametersRequired = false;
+
+              for (const key in signature.parameters) {
+                if (key === pathSignature.name) {
+                  continue;
+                }
+                const parameter = signature.parameters[key]!;
+                if (parameter.isRequired) {
+                  isParametersRequired = true;
+                }
+                const paramType = pluginTypeScript.api.schemaToType({
+                  plugin: pluginTypeScript,
+                  schema: parameter.schema,
+                  state: refs({
+                    path: [],
+                  }),
+                });
+                flatParams.prop(parameter.name, (p) =>
+                  p.required(parameter.isRequired).type(paramType as TypeTsDsl),
+                );
+              }
+
+              result.argNames.push('parameters');
+              result.fields.push({
+                args: nonPathFields,
+              });
+
+              result.parameters.push(
+                $.param('parameters', (p) => p.required(isParametersRequired).type(flatParams)),
+              );
+
+              // Fields are aligned to arguments (positional path + parameters).
+              result.fieldsByArgument = true;
+            }
+          }
         }
-        flatParams.prop(parameter.name, (p) =>
-          p.required(parameter.isRequired).type(
-            pluginTypeScript.api.schemaToType({
-              plugin: pluginTypeScript,
-              schema: parameter.schema,
-              state: refs({
-                path: [],
-              }),
+      }
+
+      // If we applied positional path params but had no other fields,
+      // fall back to flat signature so the output matches snapshots.
+      if (appliedPositionalPathParams && !result.fieldsByArgument) {
+        appliedPositionalPathParams = false;
+      }
+      if (!appliedPositionalPathParams) {
+        const flatParams = $.type.object();
+        let isParametersRequired = false;
+
+        for (const key in signature.parameters) {
+          const parameter = signature.parameters[key]!;
+          if (parameter.isRequired) {
+            isParametersRequired = true;
+          }
+          const paramType = pluginTypeScript.api.schemaToType({
+            plugin: pluginTypeScript,
+            schema: parameter.schema,
+            state: refs({
+              path: [],
             }),
-          ),
+          });
+          flatParams.prop(parameter.name, (p) =>
+            p.required(parameter.isRequired).type(paramType as TypeTsDsl),
+          );
+        }
+
+        // Add the single parameters argument to the signature.
+        result.argNames.push('parameters');
+        if (usePositionalPathParams) {
+          // Keep fields empty so we emit `[{}]` for buildClientParams.
+          result.fields.push({});
+          result.fieldsByArgument = true;
+        } else {
+          // Store the full field mapping for the flattened object.
+          result.fields.push(...signature.fields);
+          // Keep fieldsByArgument false so we wrap fields as args later.
+          result.fieldsByArgument = false;
+        }
+
+        result.parameters.push(
+          $.param('parameters', (p) => p.required(isParametersRequired).type(flatParams)),
         );
       }
-
-      result.argNames.push('parameters');
-      for (const field of signature.fields) {
-        result.fields.push(field);
-      }
-
-      result.parameters.push(
-        $.param('parameters', (p) => p.required(isParametersRequired).type(flatParams)),
-      );
     }
   }
 
@@ -389,31 +486,19 @@ export function operationStatements({
 
   if (hasParams) {
     const args: Array<ReturnType<typeof $.expr>> = [];
-    const config: Array<ReturnType<typeof $.object>> = [];
     for (const argName of opParameters.argNames) {
       args.push($(argName));
     }
-    for (const field of opParameters.fields) {
-      const shape = $.object();
-      if ('in' in field) {
-        shape.prop('in', $.literal(field.in));
-      }
-      if ('key' in field) {
-        if (field.key) {
-          shape.prop('key', $.literal(field.key));
-        }
-        if (field.map) {
-          shape.prop('map', $.literal(field.map));
-        }
-      }
-      config.push(shape);
-    }
+    // Align fields config with argument order when required.
+    const fieldsConfig = opParameters.fieldsByArgument
+      ? opParameters.fields
+      : [{ args: opParameters.fields }];
+
     const symbol = plugin.external('client.buildClientParams');
     statements.push(
-      $.const('params').assign(
-        $(symbol).call($.array(...args), $.array($.object().prop('args', $.array(...config)))),
-      ),
+      $.const('params').assign($(symbol).call($.array(...args), $.fromValue(fieldsConfig))),
     );
+
     reqOptions.spread('params');
   }
 
