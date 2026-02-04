@@ -51,6 +51,20 @@ describe(`SDK: ${namespace}`, () => {
     {
       config: createConfig({
         input: specPath,
+        output: 'flat-positional',
+        plugins: [
+          {
+            name: '@hey-api/sdk',
+            paramsStructure: 'flat',
+            positionalPathParams: true,
+          },
+        ],
+      }),
+      description: 'flat positional path params',
+    },
+    {
+      config: createConfig({
+        input: specPath,
         output: 'grouped',
         plugins: [
           {

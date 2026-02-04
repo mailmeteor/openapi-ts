@@ -38,6 +38,52 @@ export default {
 
 The SDK plugin supports a wide range of configuration options. This guide focuses on two main SDK formats: tree-shakeable functions and instantiable classes, but you can apply the same concepts to create more advanced configurations.
 
+## Parameters
+
+By default, SDK methods accept parameters as a single object when using `paramsStructure: 'flat'`. If you want path parameters as positional arguments (in the same order as they appear in the URL template), enable `positionalPathParams`.
+
+::: code-group
+
+```ts [example]
+export const projectUpdate = (
+  projectId: string,
+  parameters: {
+    name?: string;
+  },
+  options?: Options,
+) => {
+  const params = buildClientParams(
+    [projectId, parameters],
+    [
+      {
+        in: 'path',
+        key: 'projectId',
+      },
+      {
+        args: [{ in: 'body', key: 'name' }],
+      },
+    ],
+  );
+  /** ... */
+};
+```
+
+```js [config]
+export default {
+  input: 'hey-api/backend',
+  output: 'src/client',
+  plugins: [
+    {
+      name: '@hey-api/sdk',
+      paramsStructure: 'flat',
+      positionalPathParams: true,
+    },
+  ],
+};
+```
+
+:::
+
 ## Flat
 
 This is the default setting. Flat SDKs support tree-shaking, which can lead to a reduced bundle size. You select flat mode by setting `operations.strategy` to `flat`.
