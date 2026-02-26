@@ -70,6 +70,14 @@ export type UserConfig = Plugin.Name<'@hey-api/sdk'> &
      */
     paramsStructure?: 'flat' | 'grouped';
     /**
+     * Emit path parameters as positional arguments when using `paramsStructure: 'flat'`.
+     *
+     * When enabled, the SDK signature becomes `fn(pathParam, parameters?, options?)`.
+     *
+     * @default false
+     */
+    positionalPathParams?: boolean;
+    /**
      * **This feature works only with the Fetch client**
      *
      * Should we return only data or multiple fields (data, error, response, etc.)?
@@ -239,6 +247,14 @@ export type Config = Plugin.Name<'@hey-api/sdk'> &
      * @default 'grouped'
      */
     paramsStructure: 'flat' | 'grouped';
+    /**
+     * Emit path parameters as positional arguments when using `paramsStructure: 'flat'`.
+     *
+     * When enabled, the SDK signature becomes `fn(pathParam, parameters?, options?)`.
+     *
+     * @default false
+     */
+    positionalPathParams: boolean;
     /**
      * **This feature works only with the Fetch client**
      *
